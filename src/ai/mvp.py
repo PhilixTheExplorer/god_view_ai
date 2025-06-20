@@ -353,14 +353,18 @@ class HospitalMonitorMVP:
         if not self.cap.isOpened():
             print(f"Error: Failed to open video: {self.video_path}")
             return
-            
+        
         # Get video properties
         fps = self.cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = total_frames / fps if fps > 0 else 0
         
+        # Calculate frame delay to maintain original video timing
+        frame_delay = int(1000 / fps) if fps > 0 else 33  # milliseconds per frame
+        
         print(f"Processing video: {self.video_path}")
         print(f"FPS: {fps:.2f}, Duration: {duration:.2f}s, Total frames: {total_frames}")
+        print(f"Frame delay: {frame_delay}ms (to maintain original speed)")
         
         # Get frame dimensions
         ret, frame = self.cap.read()
@@ -393,12 +397,11 @@ class HospitalMonitorMVP:
                 detections = self._detect_poses(frame)
                 tracked_detections = self.tracker.update(detections)
                 self._analyze_anomalies()
-                
-                # Display frame
+                  # Display frame
                 self._display_frame(frame, tracked_detections)
                 
-                # Control playback speed
-                key = cv2.waitKey(30) & 0xFF
+                # Control playback speed - maintain original video timing
+                key = cv2.waitKey(frame_delay) & 0xFF
                 if key == ord('q'):
                     break
                 elif key == ord('p'):
