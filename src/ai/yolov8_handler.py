@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Get the path to the models directory
 models_dir = Path(__file__).parent.parent.parent / "models"
-model_path = models_dir / "yolov8n.pt"
+model_path = models_dir / "yolov8n-pose.pt"
 
 # Initialize YOLO model
 model = YOLO(str(model_path))
