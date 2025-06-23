@@ -13,6 +13,13 @@ from collections import defaultdict, deque
 import argparse
 import os
 import math
+import sys
+
+# Add project root to path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.api.alert_service import alert_service, Alert
 
 # Get the path to the models directory
 models_dir = Path(__file__).parent.parent.parent / "models"
@@ -32,18 +39,6 @@ class PoseDetection:
     posture: str
     floor_proximity: float
     pose_confidence: float
-    
-@dataclass
-class Alert:
-    """Alert data structure"""
-    patient_id: int
-    room_id: str
-    alert_type: str
-    timestamp: datetime
-    description: str
-    bbox: Optional[Tuple[int, int, int, int]] = None
-    confidence: float = 0.0
-    frame_number: int = 0
 
 class PoseAnalyzer:
     """Analyzes patient poses using keypoints and detects anomalies"""
@@ -246,80 +241,13 @@ class SimpleTracker:
         if x2_i <= x1_i or y2_i <= y1_i:
             return 0.0
             
-        intersection = (x2_i - x1_i) * (y2_i - y1_i)
-        
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)        
         # Calculate union
         area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
         area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
         union = area1 + area2 - intersection
         
         return intersection / union if union > 0 else 0.0
-
-class AlertSystem:
-    """Simple alert system for MVP"""
-    
-    def __init__(self, telegram_token: str = None, chat_id: str = None):
-        self.telegram_token = telegram_token
-        self.chat_id = chat_id
-        self.alert_history: List[Alert] = []
-        self.alert_cooldown = 30  # 30 seconds between same alerts for MVP
-        
-    def send_alert(self, alert: Alert) -> bool:
-        """Send alert via configured methods"""
-        # Check cooldown
-        if self._is_in_cooldown(alert):
-            return False
-            
-        self.alert_history.append(alert)
-        
-        # Log alert
-        print(f"\n🚨 ALERT: {alert.alert_type}")
-        print(f"   Patient ID: {alert.patient_id}")
-        print(f"   Room: {alert.room_id}")
-        print(f"   Frame: {alert.frame_number}")
-        print(f"   Time: {alert.timestamp.strftime('%H:%M:%S')}")
-        print(f"   Description: {alert.description}")
-        print("-" * 50)
-        
-        # Send via Telegram if configured
-        success = True
-        if self.telegram_token and self.chat_id:
-            success = self._send_telegram_alert(alert)
-            
-        return success
-    
-    def _send_telegram_alert(self, alert: Alert) -> bool:
-        """Send alert via Telegram"""
-        try:
-            message = (f"🚨 HOSPITAL ALERT 🚨\n"
-                      f"Type: {alert.alert_type}\n"
-                      f"Patient ID: {alert.patient_id}\n"
-                      f"Room: {alert.room_id}\n"
-                      f"Frame: {alert.frame_number}\n"
-                      f"Time: {alert.timestamp.strftime('%H:%M:%S')}\n"
-                      f"Description: {alert.description}")
-            
-            url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-            data = {"chat_id": self.chat_id, "text": message}
-            
-            response = requests.post(url, data=data, timeout=5)
-            return response.status_code == 200
-            
-        except Exception as e:
-            print(f"Failed to send Telegram alert: {e}")
-            return False
-    
-    def _is_in_cooldown(self, alert: Alert) -> bool:
-        """Check if similar alert was sent recently"""
-        cutoff_time = alert.timestamp - timedelta(seconds=self.alert_cooldown)
-        
-        for prev_alert in self.alert_history:
-            if (prev_alert.patient_id == alert.patient_id and
-                prev_alert.alert_type == alert.alert_type and
-                prev_alert.timestamp > cutoff_time):
-                return True
-                
-        return False
 
 class HospitalMonitorMVP:
     """MVP Hospital Monitoring System for video analysis"""
@@ -332,7 +260,12 @@ class HospitalMonitorMVP:
         
         # Initialize components
         self.tracker = SimpleTracker()
-        self.alert_system = AlertSystem(telegram_token, chat_id)
+        
+        # Configure global alert service with telegram credentials
+        if telegram_token:
+            alert_service.telegram_token = telegram_token
+        if chat_id:
+            alert_service.chat_id = chat_id
         
         self.model = model
             
@@ -468,35 +401,32 @@ class HospitalMonitorMVP:
         for track_id, track_history in self.tracker.tracks.items():
             if not track_history:
                 continue
-                
-            # Check for falls
+                  # Check for falls
             if self.pose_analyzer.detect_fall(track_history):
-                alert = Alert(
+                alert = alert_service.create_alert(
                     patient_id=track_id,
                     room_id=self.room_id,
                     alert_type="FALL_DETECTED",
-                    timestamp=current_time,
                     description="Patient fall detected - immediate attention required",
                     bbox=track_history[-1].bbox,
                     confidence=track_history[-1].confidence,
                     frame_number=self.frame_count
                 )
-                self.alert_system.send_alert(alert)
+                alert_service.send_alert(alert)
             
             # Check for prolonged inactivity
             if self.pose_analyzer.detect_prolonged_inactivity(
                 track_history, self.inactivity_threshold):
-                alert = Alert(
+                alert = alert_service.create_alert(
                     patient_id=track_id,
                     room_id=self.room_id,
                     alert_type="PROLONGED_INACTIVITY",
-                    timestamp=current_time,
                     description=f"Patient inactive for >{self.inactivity_threshold}s",
                     bbox=track_history[-1].bbox,
                     confidence=track_history[-1].confidence,
                     frame_number=self.frame_count
                 )
-                self.alert_system.send_alert(alert)
+                alert_service.send_alert(alert)
     
     def _display_frame(self, frame: np.ndarray, detections: List[PoseDetection]):
         """Display frame with pose overlays"""
@@ -524,14 +454,13 @@ class HospitalMonitorMVP:
             info_text = f"ID:{detection.id} {detection.posture}"
             cv2.putText(display_frame, info_text, (x1, y1-10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        
-        # Add system info
+          # Add system info
         info_text = f"Frame: {self.frame_count} | Room: {self.room_id} | Tracks: {len(self.tracker.tracks)}"
         cv2.putText(display_frame, info_text, (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         # Add alerts count
-        alert_text = f"Total Alerts: {len(self.alert_system.alert_history)}"
+        alert_text = f"Total Alerts: {len(alert_service.alert_history)}"
         cv2.putText(display_frame, alert_text, (10, 60), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
@@ -567,16 +496,15 @@ class HospitalMonitorMVP:
         if self.cap:
             self.cap.release()
         cv2.destroyAllWindows()
-        
-        # Print summary
+          # Print summary
         print(f"\nProcessing complete!")
         print(f"Total frames processed: {self.frame_count}")
-        print(f"Total alerts generated: {len(self.alert_system.alert_history)}")
+        print(f"Total alerts generated: {len(alert_service.alert_history)}")
         
         # Print alert summary
-        if self.alert_system.alert_history:
+        if alert_service.alert_history:
             print("\nAlert Summary:")
-            for alert in self.alert_system.alert_history:
+            for alert in alert_service.alert_history:
                 print(f"  - {alert.alert_type} (Patient {alert.patient_id}) at frame {alert.frame_number}")
 
 def main():
