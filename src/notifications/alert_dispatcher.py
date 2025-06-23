@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_API = f"https://api.telegram.org/bot{os.getenv('BOT_TOKEN')}/sendMessage"
+BOT_PHOTO_API = f"https://api.telegram.org/bot{os.getenv('BOT_TOKEN')}/sendPhoto"
 
 async def send_alert(role: str, message: str, priority: str = "normal") -> bool:
     """
@@ -373,3 +374,63 @@ def _get_alert_priority(alert_type: str) -> str:
         return "high"
     else:
         return "normal"
+
+async def send_photo_alert(role: str, message: str, photo_path: str, priority: str = "normal") -> bool:
+    """
+    Send alert message with photo to all users with specified role
+    
+    Args:
+        role (str): Role to send alert to
+        message (str): Alert message
+        photo_path (str): Path to the photo file
+        priority (str): Priority level (normal, high, critical)
+        
+    Returns:
+        bool: True if all messages sent successfully
+    """
+    user_ids = get_users_by_role(role)
+    
+    if not user_ids:
+        logger.warning(f"No users found with role: {role}")
+        return False
+    
+    # Check if photo file exists
+    if not os.path.exists(photo_path):
+        logger.error(f"Photo file not found: {photo_path}")
+        return False
+    
+    # Enhanced visual formatting with colors and emojis
+    formatted_message = _format_alert_message(message, priority, role)
+    
+    success_count = 0
+    total_users = len(user_ids)
+    
+    async with httpx.AsyncClient() as client:
+        for uid in user_ids:
+            try:
+                # Send photo with caption
+                with open(photo_path, 'rb') as photo_file:
+                    files = {'photo': photo_file}
+                    data = {
+                        "chat_id": uid,
+                        "caption": formatted_message,
+                        "parse_mode": "HTML"
+                    }
+                    
+                    response = await client.post(
+                        BOT_PHOTO_API,
+                        files=files,
+                        data=data
+                    )
+                    
+                if response.status_code == 200:
+                    success_count += 1
+                    logger.info(f"Photo alert sent successfully to user {uid}")
+                else:
+                    logger.error(f"Failed to send photo alert to user {uid}: {response.status_code}")
+                    
+            except Exception as e:
+                logger.error(f"Error sending photo alert to user {uid}: {e}")
+    
+    logger.info(f"Photo alert sent to {success_count}/{total_users} users")
+    return success_count == total_users

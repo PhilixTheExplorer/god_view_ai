@@ -11,7 +11,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.notifications.alert_dispatcher import send_alert as send_telegram_alert, send_patient_alert
+from src.notifications.alert_dispatcher import send_alert as send_telegram_alert, send_patient_alert, send_photo_alert
 
 @dataclass
 class Alert:
@@ -239,6 +239,68 @@ class AlertService:
             "alerts_by_room": alerts_by_room,
             "latest_alert": self._serialize_alert(self.alert_history[-1]) if self.alert_history else None
         }
+    
+    def send_photo_alert(self, alert: Alert, photo_path: str, roles: List[str] = None) -> bool:
+        """Send alert with photo via configured methods"""
+        # Check cooldown
+        if self._is_in_cooldown(alert):
+            self.logger.info(f"Alert {alert.alert_type} for patient {alert.patient_id} is in cooldown")
+            return False
+            
+        self.alert_history.append(alert)
+        
+        # Log alert
+        self.logger.info(f"🚨 PHOTO ALERT: {alert.alert_type}")
+        self.logger.info(f"   Patient ID: {alert.patient_id}")
+        self.logger.info(f"   Room: {alert.room_id}")
+        self.logger.info(f"   Frame: {alert.frame_number}")
+        self.logger.info(f"   Time: {alert.timestamp.strftime('%H:%M:%S')}")
+        self.logger.info(f"   Description: {alert.description}")
+        self.logger.info(f"   Photo: {photo_path}")
+        
+        # Print to console for MVP
+        print(f"\n📸 PHOTO ALERT: {alert.alert_type}")
+        print(f"   Patient ID: {alert.patient_id}")
+        print(f"   Room: {alert.room_id}")
+        print(f"   Frame: {alert.frame_number}")
+        print(f"   Time: {alert.timestamp.strftime('%H:%M:%S')}")
+        print(f"   Description: {alert.description}")
+        print(f"   Photo: {photo_path}")
+        print("-" * 50)
+        
+        # Send via Telegram to specified roles or default roles
+        target_roles = roles or self.default_alert_roles
+        success = True
+        
+        try:
+            # Send to each role using async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Format message for photo alert
+            message = self._format_alert_message(alert)
+            
+            for role in target_roles:
+                try:
+                    role_success = loop.run_until_complete(
+                        send_photo_alert(role, message, photo_path, self._get_priority_from_alert_type(alert.alert_type))
+                    )
+                    if not role_success:
+                        self.logger.warning(f"Failed to send photo alert to role: {role}")
+                        success = False
+                    else:
+                        self.logger.info(f"Photo alert sent successfully to role: {role}")
+                except Exception as e:
+                    self.logger.error(f"Error sending photo alert to role {role}: {e}")
+                    success = False
+            
+            loop.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error in photo alert sending process: {e}")
+            success = False
+            
+        return success
 
 # Global alert service instance
 alert_service = AlertService()
