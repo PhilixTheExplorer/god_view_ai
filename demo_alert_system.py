@@ -13,51 +13,89 @@ sys.path.insert(0, str(project_root))
 from src.api.alert_service import alert_service
 
 def demo_alert_creation():
-    """Demonstrate creating alerts programmatically"""
-    print("🚨 Creating Sample Alerts...")
+    """Demonstrate creating alerts programmatically with enhanced visual formatting"""
+    print("🚨 Creating Sample Alerts with Enhanced Visual Formatting...")
     
-    # Create different types of alerts
+    # Create different types of alerts with enhanced medical context
     alerts_to_create = [
         {
             "patient_id": 101,
             "room_id": "ICU_001",
             "alert_type": "FALL_DETECTED", 
-            "description": "Patient fall detected in ICU - immediate attention required"
+            "description": "Patient fall detected in ICU - immediate attention required. Patient may have sustained injuries.",
+            "confidence": 0.95,
+            "frame_number": 1250
         },
         {
             "patient_id": 102,
             "room_id": "WARD_A_205",
             "alert_type": "PROLONGED_INACTIVITY",
-            "description": "Patient has been inactive for over 30 minutes"
+            "description": "Patient has been inactive for over 30 minutes. No movement detected in monitoring area.",
+            "confidence": 0.87,
+            "frame_number": 2100
         },
         {
             "patient_id": 103,
             "room_id": "EMERGENCY_001",
             "alert_type": "VITAL_SIGNS_ABNORMAL",
-            "description": "Abnormal vital signs detected - heart rate irregularity"
+            "description": "Abnormal vital signs detected - heart rate irregularity and breathing pattern anomaly observed.",
+            "confidence": 0.92,
+            "frame_number": 875
+        },
+        {
+            "patient_id": 104,
+            "room_id": "CARDIAC_UNIT_B",
+            "alert_type": "CARDIAC_ARREST",
+            "description": "CRITICAL: Suspected cardiac arrest - patient showing signs of cardiovascular distress.",
+            "confidence": 0.98,
+            "frame_number": 3456
         }
     ]
     
-    print(f"📤 Sending {len(alerts_to_create)} alerts to all doctors via Telegram...")
+    print(f"📤 Sending {len(alerts_to_create)} enhanced visual alerts to all doctors via Telegram...")
+    print("💬 These alerts will feature:")
+    print("   • Color-coded priority levels")
+    print("   • Medical-specific formatting")
+    print("   • Enhanced visual elements")
+    print("   • Structured patient information")
     
     for i, alert_data in enumerate(alerts_to_create, 1):
         print(f"\n🔄 Creating alert {i}/{len(alerts_to_create)}:")
         print(f"   Patient: {alert_data['patient_id']}")
         print(f"   Room: {alert_data['room_id']}")
         print(f"   Type: {alert_data['alert_type']}")
+        print(f"   Priority: {_get_visual_priority(alert_data['alert_type'])}")
         
         # Create alert
         alert = alert_service.create_alert(**alert_data)
         
-        # Send alert (this will go to all doctors via Telegram)
+        # Send alert (this will go to all doctors via Telegram with enhanced formatting)
         success = alert_service.send_alert(alert)
         
         if success:
-            print(f"   ✅ Alert sent successfully")
+            print(f"   ✅ Enhanced visual alert sent successfully")
         else:
             print(f"   ❌ Alert sending failed")
+        
+        # Small delay between alerts
+        import time
+        time.sleep(1)
     
     print(f"\n📊 Total alerts in system: {len(alert_service.alert_history)}")
+
+def _get_visual_priority(alert_type: str) -> str:
+    """Get visual priority description"""
+    priority_map = {
+        "FALL_DETECTED": "🔴 CRITICAL",
+        "PROLONGED_INACTIVITY": "🟠 HIGH", 
+        "VITAL_SIGNS_ABNORMAL": "🔴 CRITICAL",
+        "CARDIAC_ARREST": "🔴 CRITICAL",
+        "RESPIRATORY_DISTRESS": "🔴 CRITICAL",
+        "EMERGENCY": "🔴 CRITICAL",
+        "MEDICATION_DUE": "🟠 HIGH",
+        "TEST_ALERT": "🔵 NORMAL"
+    }
+    return priority_map.get(alert_type, "🔵 NORMAL")
 
 def show_alert_stats():
     """Show current alert statistics"""

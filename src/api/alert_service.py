@@ -11,7 +11,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.notifications.alert_dispatcher import send_alert as send_telegram_alert
+from src.notifications.alert_dispatcher import send_alert as send_telegram_alert, send_patient_alert
 
 @dataclass
 class Alert:
@@ -78,32 +78,57 @@ class AlertService:
         print(f"   Time: {alert.timestamp.strftime('%H:%M:%S')}")
         print(f"   Description: {alert.description}")
         print("-" * 50)
-        
-        # Send via Telegram to specified roles or default roles
+          # Send via Telegram to specified roles or default roles
         target_roles = roles or self.default_alert_roles
         success = True
         
         try:
-            # Create alert message for Telegram
-            message = self._format_alert_message(alert)
-            
             # Send to each role using async function
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            for role in target_roles:
-                try:
-                    role_success = loop.run_until_complete(
-                        send_telegram_alert(role, message, self._get_priority_from_alert_type(alert.alert_type))
-                    )
-                    if not role_success:
-                        self.logger.warning(f"Failed to send alert to role: {role}")
+            # Use enhanced patient alert formatting for medical alerts
+            if self._is_medical_alert(alert.alert_type):
+                # Convert alert to patient data format
+                patient_data = {
+                    "patient_id": alert.patient_id,
+                    "room_id": alert.room_id,
+                    "description": alert.description,
+                    "confidence": alert.confidence,
+                    "frame_number": alert.frame_number
+                }
+                
+                # Send enhanced patient alert
+                for role in target_roles:
+                    try:
+                        role_success = loop.run_until_complete(
+                            send_patient_alert(role, alert.alert_type, patient_data)
+                        )
+                        if not role_success:
+                            self.logger.warning(f"Failed to send alert to role: {role}")
+                            success = False
+                        else:
+                            self.logger.info(f"Enhanced patient alert sent successfully to role: {role}")
+                    except Exception as e:
+                        self.logger.error(f"Error sending patient alert to role {role}: {e}")
                         success = False
-                    else:
-                        self.logger.info(f"Alert sent successfully to role: {role}")
-                except Exception as e:
-                    self.logger.error(f"Error sending alert to role {role}: {e}")
-                    success = False
+            else:
+                # Use standard alert formatting for non-medical alerts
+                message = self._format_alert_message(alert)
+                
+                for role in target_roles:
+                    try:
+                        role_success = loop.run_until_complete(
+                            send_telegram_alert(role, message, self._get_priority_from_alert_type(alert.alert_type))
+                        )
+                        if not role_success:
+                            self.logger.warning(f"Failed to send alert to role: {role}")
+                            success = False
+                        else:
+                            self.logger.info(f"Alert sent successfully to role: {role}")
+                    except Exception as e:
+                        self.logger.error(f"Error sending alert to role {role}: {e}")
+                        success = False
             
             loop.close()
             
@@ -128,9 +153,27 @@ class AlertService:
         priority_mapping = {
             "FALL_DETECTED": "critical",
             "PROLONGED_INACTIVITY": "high", 
+            "VITAL_SIGNS_ABNORMAL": "critical",
+            "CARDIAC_ARREST": "critical",
+            "RESPIRATORY_DISTRESS": "critical",
+            "EMERGENCY": "critical",
+            "MEDICATION_DUE": "high",
             "TEST_ALERT": "normal"
         }
         return priority_mapping.get(alert_type, "normal")
+    
+    def _is_medical_alert(self, alert_type: str) -> bool:
+        """Check if alert type is medical and should use patient formatting"""
+        medical_alert_types = [
+            "FALL_DETECTED",
+            "PROLONGED_INACTIVITY", 
+            "VITAL_SIGNS_ABNORMAL",
+            "CARDIAC_ARREST",
+            "RESPIRATORY_DISTRESS",
+            "EMERGENCY",
+            "MEDICATION_DUE"
+        ]
+        return alert_type in medical_alert_types
     
     def _is_in_cooldown(self, alert: Alert) -> bool:
         """Check if similar alert was sent recently"""
