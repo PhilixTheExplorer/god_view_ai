@@ -11,7 +11,6 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.ai.yolov8_handler import detect_abnormalities
 from src.notifications.alert_dispatcher import send_alert
 from src.api.alert_service import alert_service, Alert
 
@@ -46,21 +45,6 @@ def home():
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "service": "GodView AI API", "alerts_total": len(alert_service.alert_history)}
-
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    temp_path = f"temp_{file.filename}"
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-
-    # alerts = detect_abnormalities(temp_path)
-    alerts = ["Example alert: Abnormality detected in image." for x in range(2)]  # Placeholder for actual detection logic
-    os.remove(temp_path)
-
-    for alert in alerts:
-        await send_alert("doctor", f"Detected abnormality: {alert}")
-
-    return {"status": "ok", "alerts": alerts}
 
 # Alert Management Endpoints
 @app.post("/alerts", response_model=AlertResponse)
