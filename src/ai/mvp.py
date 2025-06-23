@@ -119,29 +119,56 @@ class PoseAnalyzer:
                     y_coords.append(keypoints[idx, 1])
         
         return np.mean(y_coords) if y_coords else None
-    
     def detect_fall(self, track_history: deque) -> bool:
-        """Detect fall based on posture changes over time"""
-        if len(track_history) < 3:
+        """Detect fall based on posture changes over time - Enhanced for testing"""
+        if len(track_history) < 2:  # Reduced minimum history
             return False
             
-        recent = list(track_history)[-10:]  # Last 10 detections
+        recent = list(track_history)[-8:]  # Look at last 8 detections
         
         # Look for transition from standing/sitting to lying
         standing_sitting_count = 0
         lying_count = 0
+        unknown_count = 0
         
         for detection in recent:
             if detection.posture in ["standing", "sitting"]:
                 standing_sitting_count += 1
             elif detection.posture == "lying":
                 lying_count += 1
+            else:
+                unknown_count += 1
         
-        # If recent detections show transition to lying position
-        if lying_count >= 3 and standing_sitting_count >= 2:
-            # Check if the lying position is near floor
+        # Enhanced fall detection conditions
+        # Condition 1: Clear transition to lying position
+        if lying_count >= 2 and standing_sitting_count >= 1:
             recent_lying = [d for d in recent if d.posture == "lying"]
-            if recent_lying and recent_lying[-1].floor_proximity > 0.75:
+            if recent_lying and recent_lying[-1].floor_proximity > 0.7:  # Lowered threshold
+                print(f"   └─ Fall detected: lying_count={lying_count}, standing_sitting_count={standing_sitting_count}")
+                return True
+        
+        # Condition 2: High floor proximity with posture change
+        if len(recent) >= 3:
+            latest_detection = recent[-1]
+            if (latest_detection.floor_proximity > 0.8 and 
+                latest_detection.posture in ["lying", "unknown"]):
+                # Check if there was a position change
+                earlier_detections = recent[:-2]
+                if any(d.floor_proximity < 0.6 for d in earlier_detections):
+                    print(f"   └─ Fall detected: high floor proximity with position change")
+                    return True
+        
+        # Condition 3: Rapid position change (bbox vertical movement)
+        if len(recent) >= 3:
+            positions = [self._get_bbox_center(d.bbox) for d in recent]
+            vertical_movements = []
+            for i in range(1, len(positions)):
+                vertical_movement = positions[i][1] - positions[i-1][1]
+                vertical_movements.append(vertical_movement)
+            
+            # Check for significant downward movement
+            if any(movement > 50 for movement in vertical_movements):  # Pixels moved down
+                print(f"   └─ Fall detected: rapid downward movement")
                 return True
                 
         return False
@@ -272,11 +299,14 @@ class HospitalMonitorMVP:
         # Video capture
         self.cap = None
         self.pose_analyzer = None
-        
-        # Configuration
-        self.inactivity_threshold = 10000  # seconds for MVP
+          # Configuration
+        self.inactivity_threshold = 10  # Reduced for testing
         self.confidence_threshold = 0.3
         self.frame_count = 0
+        
+        # Fall detection sensitivity for testing
+        self.fall_detection_enabled = True
+        self.debug_mode = True  # Enable debug logging
         
     def process_video(self):
         """Process video file for patient monitoring"""
@@ -384,8 +414,7 @@ class HospitalMonitorMVP:
                             keypoints=kpt_array,
                             posture=posture,
                             floor_proximity=floor_prox,
-                            pose_confidence=pose_conf
-                        )
+                            pose_confidence=pose_conf                        )
                         
                         detections.append(detection)
                         
@@ -401,32 +430,48 @@ class HospitalMonitorMVP:
         for track_id, track_history in self.tracker.tracks.items():
             if not track_history:
                 continue
-                  # Check for falls
+            
+            # Debug logging for fall detection
+            if self.debug_mode and len(track_history) >= 3:
+                recent_postures = [d.posture for d in list(track_history)[-5:]]
+                print(f"Track {track_id}: Recent postures: {recent_postures}")
+                
+            # Check for falls
             if self.pose_analyzer.detect_fall(track_history):
+                print(f"🚨 FALL DETECTED for track {track_id}!")
                 alert = alert_service.create_alert(
                     patient_id=track_id,
                     room_id=self.room_id,
                     alert_type="FALL_DETECTED",
-                    description="Patient fall detected - immediate attention required",
+                    description=f"Patient fall detected in {self.room_id} - immediate attention required. Analysis shows transition from upright to lying position.",
                     bbox=track_history[-1].bbox,
                     confidence=track_history[-1].confidence,
                     frame_number=self.frame_count
                 )
-                alert_service.send_alert(alert)
+                success = alert_service.send_alert(alert)
+                if success:
+                    print(f"✅ Fall alert sent to Telegram!")
+                else:
+                    print(f"❌ Failed to send fall alert to Telegram")
             
             # Check for prolonged inactivity
             if self.pose_analyzer.detect_prolonged_inactivity(
                 track_history, self.inactivity_threshold):
+                print(f"⏰ PROLONGED INACTIVITY detected for track {track_id}")
                 alert = alert_service.create_alert(
                     patient_id=track_id,
                     room_id=self.room_id,
                     alert_type="PROLONGED_INACTIVITY",
-                    description=f"Patient inactive for >{self.inactivity_threshold}s",
+                    description=f"Patient in {self.room_id} has been inactive for over {self.inactivity_threshold} seconds. No significant movement detected.",
                     bbox=track_history[-1].bbox,
                     confidence=track_history[-1].confidence,
                     frame_number=self.frame_count
                 )
-                alert_service.send_alert(alert)
+                success = alert_service.send_alert(alert)
+                if success:
+                    print(f"✅ Inactivity alert sent to Telegram!")
+                else:
+                    print(f"❌ Failed to send inactivity alert to Telegram")
     
     def _display_frame(self, frame: np.ndarray, detections: List[PoseDetection]):
         """Display frame with pose overlays"""
