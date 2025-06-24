@@ -14,14 +14,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.ai.mvp import HospitalMonitorMVP
 from src.api.alert_service import alert_service
-from dotenv import load_dotenv
 
 class TestFallDetection:
     """Test suite for fall detection functionality"""
     
     def _setup(self):
         """Setup for each test - internal method"""
-        load_dotenv()
         # Clear alert history before each test
         alert_service.alert_history.clear()
     
@@ -155,16 +153,33 @@ def run_manual_tests():
     """
     Manual test runner for when pytest is not available
     """
+    from dotenv import load_dotenv
+    
     print("=" * 60)
     print("GodView Fall Detection Test Suite")
     print("=" * 60)
     
+    # Load environment variables first - use explicit path
+    env_path = PROJECT_ROOT / ".env"
+    load_dotenv(env_path, override=True)
+    
     # Get test video path from environment or use default
     test_video_env = os.getenv("TEST_VIDEO_PATH")
+    print(f"🔍 TEST_VIDEO_PATH from env: {test_video_env}")
+    
     if test_video_env:
-        test_video = Path(test_video_env)
+        # Handle both absolute and relative paths
+        if os.path.isabs(test_video_env):
+            test_video = Path(test_video_env)
+        else:
+            test_video = PROJECT_ROOT / test_video_env
+        print(f"📹 Using custom test video from environment: {test_video}")
     else:
         test_video = PROJECT_ROOT / "dataset" / "chute02" / "cam7.avi"
+        print(f"📹 Using default test video: {test_video}")
+    
+    print(f"📍 Final video path: {test_video.absolute()}")
+    print(f"✅ Video file exists: {test_video.exists()}")
     
     # Create test instance
     test_instance = TestFallDetection()
