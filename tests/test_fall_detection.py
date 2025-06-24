@@ -159,8 +159,14 @@ def run_manual_tests():
     print("GodView Fall Detection Test Suite")
     print("=" * 60)
     
-    test_video = PROJECT_ROOT / "dataset" / "chute02" / "cam7.avi"
-      # Create test instance
+    # Get test video path from environment or use default
+    test_video_env = os.getenv("TEST_VIDEO_PATH")
+    if test_video_env:
+        test_video = Path(test_video_env)
+    else:
+        test_video = PROJECT_ROOT / "dataset" / "chute02" / "cam7.avi"
+    
+    # Create test instance
     test_instance = TestFallDetection()
     test_instance._setup()
     
