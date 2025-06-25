@@ -78,7 +78,7 @@ class TestFallDetection:
         if not bot_token:
             pytest.skip("BOT_TOKEN not configured")
         
-        room_id = "TEST_CHUTE02_CAM7"
+        room_id = test_video_path.stem
         
         print(f"🏥 Running Fall Detection Test")
         print(f"📹 Video: {test_video_path}")
