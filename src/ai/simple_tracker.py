@@ -1,35 +1,34 @@
 from typing import Dict, List, Optional
 from collections import defaultdict, deque
 from datetime import datetime
-
 from .pose_detection import PoseDetection
 
 class SimpleTracker:
     """Simple tracker for MVP - tracks people across frames"""
-    
-    def __init__(self, max_age: int = 30):
+    def __init__(self, max_age: int = 30, min_keypoints_needed: int = 5):
         self.tracks: Dict[int, deque] = defaultdict(lambda: deque(maxlen=max_age))
         self.last_seen: Dict[int, datetime] = {}
         self.next_id = 1
-        
+        self.min_keypoints_needed = min_keypoints_needed
+
     def update(self, detections: List[PoseDetection]) -> List[PoseDetection]:
-        """Update tracks with new detections"""
+        """Update tracks with new detections, ignoring invalid ones."""
         tracked_detections = []
-        
         for detection in detections:
-            # Simple tracking based on bbox overlap
+            if (detection.keypoints.shape[0] < self.min_keypoints_needed or 
+                sum(detection.keypoints[:, 2] > 0.3) < self.min_keypoints_needed):
+                continue  # Discard detection with too few valid keypoints
             best_id = self._find_best_match(detection)
             if best_id is None:
                 best_id = self.next_id
                 self.next_id += 1
-            
             detection.id = best_id
             self.tracks[best_id].append(detection)
             self.last_seen[best_id] = detection.timestamp
             tracked_detections.append(detection)
-            
+
         return tracked_detections
-    
+
     def _find_best_match(self, detection: PoseDetection) -> Optional[int]:
         """Find best matching track for detection"""
         best_id = None
