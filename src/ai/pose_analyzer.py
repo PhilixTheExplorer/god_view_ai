@@ -75,12 +75,17 @@ class PoseAnalyzer:
         return False
 
     def detect_prolonged_inactivity(self, track_history: deque, threshold_seconds: int = 300) -> bool:
-        """Detect prolonged inactivity based on position change over time."""
+        """Detect prolonged inactivity based on position change over time, only for lying patients."""
         if len(track_history) < 10:
             return False
 
         recent = list(track_history)
         if not recent:
+            return False
+
+        # Check if patient has been lying for the majority of the time period
+        lying_count = sum(1 for d in recent if d.posture == "lying")
+        if lying_count < len(recent) * 0.7:  # Must be lying for at least 70% of the time
             return False
 
         time_span = recent[-1].timestamp - recent[0].timestamp
