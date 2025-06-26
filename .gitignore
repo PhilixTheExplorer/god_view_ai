@@ -113,4 +113,5 @@ dmypy.json
 
 dataset/
 snapshots/
-clips
+clips/
+FallDataset/

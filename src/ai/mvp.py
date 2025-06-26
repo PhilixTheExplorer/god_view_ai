@@ -47,7 +47,8 @@ class HospitalMonitorMVP:
         # Video capture
         self.cap = None
         self.pose_analyzer = None
-          # Configuration
+        
+        # Configuration
         self.inactivity_threshold = 10  # Reduced for testing
         self.confidence_threshold = 0.3
         self.frame_count = 0
@@ -55,6 +56,10 @@ class HospitalMonitorMVP:
         # Fall detection sensitivity for testing
         self.fall_detection_enabled = True
         self.debug_mode = True  # Enable debug logging
+        
+        # Fall detection cooldown to prevent spam alerts
+        self.fall_detection_cooldown = {}  # track_id -> last_alert_time
+        self.fall_cooldown_seconds = 30    # Wait 30 seconds between fall alerts for same track
         
         # Create clips directory for video sequences
         self.clips_dir = Path("clips")
@@ -147,14 +152,18 @@ class HospitalMonitorMVP:
         print(f"FPS: {fps:.2f}, Duration: {duration:.2f}s, Total frames: {total_frames}")
         print(f"Frame delay: {frame_delay}ms (to maintain original speed)")
         
-        # Get frame dimensions
+        # Get frame dimensions and initialize pose analyzer
         ret, frame = self.cap.read()
         if not ret:
             print("Error: Failed to read first frame")
             return
             
         height, width = frame.shape[:2]
-        self.pose_analyzer = PoseAnalyzer(height, width)
+        
+        # Initialize pose analyzer with frame dimensions
+        if self.pose_analyzer is None:
+            self.pose_analyzer = PoseAnalyzer(height, width)
+            print(f"✅ Pose analyzer initialized with frame size: {width}x{height}")
         
         print(f"Frame size: {width}x{height}")
         print("Starting analysis... Press 'q' to quit, 'p' to pause")
@@ -248,85 +257,116 @@ class HospitalMonitorMVP:
         """Analyze tracks for anomalies and generate alerts"""
         current_time = datetime.now()
         
+        # Check if pose analyzer is initialized
+        if self.pose_analyzer is None:
+            print("⚠️ Pose analyzer not initialized, skipping anomaly analysis")
+            return
+        
         for track_id, track_history in self.tracker.tracks.items():
             if not track_history:
                 continue
-              # Debug logging for fall detection
+                
+            # Debug logging for fall detection
             if self.debug_mode and len(track_history) >= 3:
                 recent_postures = [d.posture for d in list(track_history)[-8:]]
                 print(f"Track {track_id}: Recent postures: {recent_postures}")
                 
                 # Additional debug for fall detection analysis
                 if len(track_history) >= 5:
-                    recent_history = list(track_history)[-8:]
-                    fall_detected = self.pose_analyzer.detect_fall(track_history)
-                    print(f"Track {track_id}: Fall analysis result: {fall_detected}")
+                    try:
+                        fall_detected = self.pose_analyzer.detect_fall(track_history)
+                        print(f"Track {track_id}: Fall analysis result: {fall_detected}")
+                    except Exception as e:
+                        print(f"❌ Error in fall detection for track {track_id}: {e}")
+                        continue
             
-            # Check for falls
-            if self.pose_analyzer.detect_fall(track_history):
-                recent_postures_for_alert = [d.posture for d in list(track_history)[-8:]]
-                print(f"🚨 FALL DETECTED for track {track_id}!")
-                print(f"   Posture sequence: {recent_postures_for_alert}")
-                
-                # Save video clip for fall detection
-                clip_path = self._save_fall_clip("FALL_DETECTED", track_id)
-                
-                alert = alert_service.create_alert(
-                    patient_id=track_id,
-                    room_id=self.room_id,
-                    alert_type="FALL_DETECTED",
-                    description=f"Patient fall detected in {self.room_id} - immediate attention required. Fall sequence captured in video clip.",
-                    bbox=track_history[-1].bbox,
-                    confidence=track_history[-1].confidence,
-                    frame_number=self.frame_count                )
-                
-                if clip_path:
-                    # Send alert with video clip
-                    success = alert_service.send_video_alert(alert, clip_path)
-                    if success:
-                        print(f"✅ Fall alert with video clip sent to Telegram!")
+            # Check for falls with error handling
+            try:
+                if self.pose_analyzer.detect_fall(track_history):
+                    # Check cooldown to prevent spam alerts
+                    current_time = datetime.now()
+                    last_alert_time = self.fall_detection_cooldown.get(track_id)
+                    
+                    if (last_alert_time is None or 
+                        (current_time - last_alert_time).total_seconds() >= self.fall_cooldown_seconds):
+                        
+                        recent_postures_for_alert = [d.posture for d in list(track_history)[-8:]]
+                        print(f"🚨 FALL DETECTED for track {track_id}!")
+                        print(f"   Posture sequence: {recent_postures_for_alert}")
+                        
+                        # Update cooldown
+                        self.fall_detection_cooldown[track_id] = current_time
+                        
+                        # Save video clip for fall detection
+                        clip_path = self._save_fall_clip("FALL_DETECTED", track_id)
+                        
+                        alert = alert_service.create_alert(
+                            patient_id=track_id,
+                            room_id=self.room_id,
+                            alert_type="FALL_DETECTED",
+                            description=f"Patient fall detected in {self.room_id} - immediate attention required. Fall sequence captured in video clip.",
+                            bbox=track_history[-1].bbox,
+                            confidence=track_history[-1].confidence,
+                            frame_number=self.frame_count
+                        )
+                        
+                        if clip_path:
+                            # Send alert with video clip
+                            success = alert_service.send_video_alert(alert, clip_path)
+                            if success:
+                                print(f"✅ Fall alert with video clip sent to Telegram!")
+                            else:
+                                print(f"❌ Failed to send fall alert with video clip to Telegram")
+                        else:
+                            # Fallback to regular alert if clip creation failed
+                            success = alert_service.send_alert(alert)
+                            if success:
+                                print(f"✅ Fall alert sent to Telegram (no video clip)!")
+                            else:
+                                print(f"❌ Failed to send fall alert to Telegram")
                     else:
-                        print(f"❌ Failed to send fall alert with video clip to Telegram")
-                else:
-                    # Fallback to regular alert if clip creation failed
-                    success = alert_service.send_alert(alert)
-                    if success:
-                        print(f"✅ Fall alert sent to Telegram (no video clip)!")
-                    else:
-                        print(f"❌ Failed to send fall alert to Telegram")
+                        cooldown_remaining = self.fall_cooldown_seconds - (current_time - last_alert_time).total_seconds()
+                        print(f"⏳ Fall detected for track {track_id} but still in cooldown ({cooldown_remaining:.1f}s remaining)")
+            except Exception as e:
+                print(f"❌ Error in fall detection for track {track_id}: {e}")
+                continue
             
-            # Check for prolonged inactivity
-            if self.pose_analyzer.detect_prolonged_inactivity(
-                track_history, self.inactivity_threshold):
-                print(f"⏰ PROLONGED INACTIVITY detected for track {track_id}")
-                
-                # Save snapshot for inactivity detection
-                snapshot_path = self._save_snapshot(frame, "PROLONGED_INACTIVITY", track_id)
-                
-                alert = alert_service.create_alert(
-                    patient_id=track_id,
-                    room_id=self.room_id,
-                    alert_type="PROLONGED_INACTIVITY",
-                    description=f"Patient in {self.room_id} has been inactive for over {self.inactivity_threshold} seconds. No significant movement detected.",
-                    bbox=track_history[-1].bbox,
-                    confidence=track_history[-1].confidence,
-                    frame_number=self.frame_count
-                )
-                
-                if snapshot_path:
-                    # Send alert with photo
-                    success = alert_service.send_photo_alert(alert, snapshot_path)
-                    if success:
-                        print(f"✅ Inactivity alert with photo sent to Telegram!")
+            # Check for prolonged inactivity with error handling
+            try:
+                if self.pose_analyzer.detect_prolonged_inactivity(
+                    track_history, self.inactivity_threshold):
+                    print(f"⏰ PROLONGED INACTIVITY detected for track {track_id}")
+                    
+                    # Save snapshot for inactivity detection
+                    snapshot_path = self._save_snapshot(frame, "PROLONGED_INACTIVITY", track_id)
+                    
+                    alert = alert_service.create_alert(
+                        patient_id=track_id,
+                        room_id=self.room_id,
+                        alert_type="PROLONGED_INACTIVITY",
+                        description=f"Patient in {self.room_id} has been inactive for over {self.inactivity_threshold} seconds. No significant movement detected.",
+                        bbox=track_history[-1].bbox,
+                        confidence=track_history[-1].confidence,
+                        frame_number=self.frame_count
+                    )
+                    
+                    if snapshot_path:
+                        # Send alert with photo
+                        success = alert_service.send_photo_alert(alert, snapshot_path)
+                        if success:
+                            print(f"✅ Inactivity alert with photo sent to Telegram!")
+                        else:
+                            print(f"❌ Failed to send inactivity alert with photo to Telegram")
                     else:
-                        print(f"❌ Failed to send inactivity alert with photo to Telegram")
-                else:
-                    # Fallback to regular alert if snapshot failed
-                    success = alert_service.send_alert(alert)
-                    if success:
-                        print(f"✅ Inactivity alert sent to Telegram!")
-                    else:
-                        print(f"❌ Failed to send inactivity alert to Telegram")
+                        # Fallback to regular alert if snapshot failed
+                        success = alert_service.send_alert(alert)
+                        if success:
+                            print(f"✅ Inactivity alert sent to Telegram!")
+                        else:
+                            print(f"❌ Failed to send inactivity alert to Telegram")
+            except Exception as e:
+                print(f"❌ Error in inactivity detection for track {track_id}: {e}")
+                continue
     
     def _display_frame(self, frame: np.ndarray, detections: List[PoseDetection]):
         """Display frame with pose overlays"""

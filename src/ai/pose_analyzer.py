@@ -238,161 +238,275 @@ class PoseAnalyzer:
                 return "sitting"
 
     def detect_fall(self, track_history: deque) -> bool:
-        """Detect falls based on multi-angle analysis and movement patterns."""
-        if len(track_history) < 3:
+        """Enhanced fall detection with improved accuracy and reduced false positives."""
+        if len(track_history) < 6:  # Need more frames for reliable detection
             return False
-        recent = list(track_history)[-8:]
-
+        
+        recent = list(track_history)[-12:]  # Look at more frames for better context
+        
         # Analyze posture transitions and movement patterns
         posture_sequence = [d.posture for d in recent]
         bbox_sequence = [d.bbox for d in recent]
         floor_proximities = [d.floor_proximity for d in recent]
+        confidences = [d.confidence for d in recent]
+        timestamps = [d.timestamp for d in recent]
         
-        # Debug logging
-        # print(f"[DEBUG] Fall detection analysis:")
-        # print(f"[DEBUG] Posture sequence: {posture_sequence}")
+        # Skip if too many unknown postures (unreliable detection)
+        unknown_count = posture_sequence.count("unknown")
+        if unknown_count > len(posture_sequence) * 0.4:  # More than 40% unknown
+            return False
         
-        # Enhanced fall detection criteria
-        fall_indicators = 0
+        # Check for minimum pose confidence
+        avg_confidence = sum(confidences) / len(confidences)
+        if avg_confidence < 0.4:  # Require decent pose detection quality
+            return False
         
-        # 1. SUDDEN posture transition: standing/sitting to lying (not gradual)
-        # Check for rapid, uncontrolled transitions vs normal movement
-        sudden_transition = self._detect_sudden_fall_transition(posture_sequence)
-        if sudden_transition:
-            fall_indicators += 1
-            # print(f"[DEBUG] Sudden transition detected: +1 indicator")
+        # CRITICAL: Check for normal patterns first (these are NOT falls)
+        if self._is_normal_movement_pattern(posture_sequence):
+            print(f"[FALL DEBUG] Normal movement pattern detected - NOT a fall")
+            return False
         
-        # 2. Rapid vertical movement (based on bounding box center changes)
-        if len(bbox_sequence) >= 3:
-            vertical_movements = []
-            for i in range(1, len(bbox_sequence)):
-                prev_center_y = (bbox_sequence[i-1][1] + bbox_sequence[i-1][3]) / 2
-                curr_center_y = (bbox_sequence[i][1] + bbox_sequence[i][3]) / 2
-                vertical_movements.append(curr_center_y - prev_center_y)
-            
-            # Check for significant downward movement (falling motion)
-            max_downward = max(vertical_movements) if vertical_movements else 0
-            if max_downward > self.frame_height * 0.1:  # 10% of frame height
-                fall_indicators += 1
-                # print(f"[DEBUG] Rapid vertical movement detected: +1 indicator")
+        # Enhanced fall detection with stricter criteria
+        fall_score = 0.0
         
-        # 3. High floor proximity in lying position (after sudden movement)
-        recent_lying = [d for d in recent if d.posture == "lying"]
-        if recent_lying and max(d.floor_proximity for d in recent_lying) > 0.7:
-            fall_indicators += 1
-            # print(f"[DEBUG] High floor proximity detected: +1 indicator")
+        # 1. PRIMARY INDICATOR: Direct standing to lying transition
+        direct_fall = self._detect_direct_standing_to_lying(posture_sequence)
+        if direct_fall:
+            fall_score += 3.0  # Strong indicator
+            print(f"[FALL DEBUG] Direct standing→lying transition: +3.0")
         
-        # 4. Rapid bounding box aspect ratio change (sudden horizontal orientation)
-        if len(bbox_sequence) >= 3:
-            aspect_ratios = []
-            for bbox in bbox_sequence:
-                width = bbox[2] - bbox[0]
-                height = bbox[3] - bbox[1]
-                aspect_ratios.append(width / height if height > 0 else 1.0)
-            
-            # Check for rapid increase in aspect ratio (sudden horizontal orientation)
-            if self._detect_rapid_horizontal_change(aspect_ratios):
-                fall_indicators += 1
-                # print(f"[DEBUG] Rapid horizontal change detected: +1 indicator")
+        # 2. SECONDARY: Rapid vertical movement (only if posture change detected)
+        if direct_fall and len(bbox_sequence) >= 4:
+            rapid_vertical = self._detect_rapid_vertical_movement(bbox_sequence)
+            if rapid_vertical:
+                fall_score += 1.0
+                print(f"[FALL DEBUG] Rapid vertical movement: +1.0")
         
-        # print(f"[DEBUG] Total fall indicators: {fall_indicators}/4")
+        # 3. TERTIARY: Aspect ratio change (body orientation)
+        if len(bbox_sequence) >= 4:
+            aspect_change = self._detect_body_orientation_change(bbox_sequence)
+            if aspect_change:
+                fall_score += 0.5
+                print(f"[FALL DEBUG] Body orientation change: +0.5")
         
-        # Enhanced fall criteria: require at least 2 indicators for better accuracy
-        result = fall_indicators >= 2
-        if result:
-            print(f"[FALL DETECTION] Sequence: {posture_sequence} -> FALL DETECTED ({fall_indicators} indicators)")
-        return result
+        # 4. VALIDATION: Temporal consistency check
+        time_window = (timestamps[-1] - timestamps[0]).total_seconds()
+        if time_window > 3.0:  # Falls should happen within 3 seconds
+            print(f"[FALL DEBUG] Time window too long ({time_window:.1f}s) - likely not a fall")
+            return False
+        
+        # 5. VALIDATION: Final position check
+        final_posture = posture_sequence[-1]
+        if final_posture != "lying":
+            print(f"[FALL DEBUG] Final posture is not lying ({final_posture}) - not a fall")
+            return False
+        
+        print(f"[FALL DEBUG] Fall score: {fall_score:.1f}")
+        print(f"[FALL DEBUG] Posture sequence: {posture_sequence}")
+        print(f"[FALL DEBUG] Time window: {time_window:.1f}s")
+        
+        # Require high confidence for fall detection
+        is_fall = fall_score >= 3.0
+        
+        if is_fall:
+            print(f"[FALL DETECTION] ⚠️ FALL DETECTED! Score: {fall_score:.1f}")
+            print(f"[FALL DETECTION] Sequence: {posture_sequence}")
+            print(f"[FALL DETECTION] Duration: {time_window:.1f}s")
+        
+        return is_fall
     
-    def _detect_sudden_fall_transition(self, posture_sequence: List[str]) -> bool:
-        """Detect sudden fall transitions vs normal movement patterns."""
+    def _is_normal_movement_pattern(self, posture_sequence: List[str]) -> bool:
+        """Check if the posture sequence represents normal, controlled movement (not a fall)."""
         if len(posture_sequence) < 3:
             return False
         
-        # print(f"[DEBUG] Analyzing posture sequence: {posture_sequence}")
-        
-        # First, check for any normal movement patterns that indicate controlled transitions
-        # These should NEVER be considered falls
-        
-        # Check for lying to sitting/standing transitions (getting up - normal movement)
+        # Pattern 1: Any lying to sitting/standing transition (getting up)
         for i in range(len(posture_sequence) - 1):
             if (posture_sequence[i] == "lying" and 
                 posture_sequence[i + 1] in ["sitting", "standing"]):
-                # This is normal movement (getting up), definitely not a fall
-                print(f"[FALL DEBUG] Normal movement detected: lying → {posture_sequence[i + 1]} at position {i}")
-                return False
+                print(f"[FALL DEBUG] Normal getting up pattern: lying → {posture_sequence[i + 1]}")
+                return True
         
-        # Check for gradual transitions (controlled movement)
+        # Pattern 2: Gradual transitions (controlled movements)
         for i in range(len(posture_sequence) - 2):
-            # Pattern: lying → sitting → standing (normal getting up sequence)
-            if (posture_sequence[i] == "lying" and 
-                posture_sequence[i + 1] == "sitting" and 
-                posture_sequence[i + 2] == "standing"):
-                print(f"[FALL DEBUG] Normal getting up sequence detected: lying → sitting → standing")
-                return False
-            
-            # Pattern: standing → sitting → lying (normal sitting down then lying down)
+            # Standing → sitting → lying (controlled lying down)
             if (posture_sequence[i] == "standing" and 
                 posture_sequence[i + 1] == "sitting" and 
                 posture_sequence[i + 2] == "lying"):
-                print(f"[FALL DEBUG] Normal sitting down sequence detected: standing → sitting → lying")
-                return False
+                print(f"[FALL DEBUG] Normal controlled lying down: standing → sitting → lying")
+                return True
+            
+            # Lying → sitting → standing (getting up gradually)
+            if (posture_sequence[i] == "lying" and 
+                posture_sequence[i + 1] == "sitting" and 
+                posture_sequence[i + 2] == "standing"):
+                print(f"[FALL DEBUG] Normal getting up: lying → sitting → standing")
+                return True
         
-        # Only NOW check for fall patterns (sudden, uncontrolled movements)
-        # These patterns are only considered if no normal movements were detected above
+        # Pattern 3: Stable position (already lying for most of the sequence)
+        lying_count = posture_sequence.count("lying")
+        if lying_count >= len(posture_sequence) * 0.75:  # 75% lying
+            print(f"[FALL DEBUG] Stable lying position (not a fall)")
+            return True
+        
+        # Pattern 4: Sitting to lying with prior standing→sitting (normal bedtime)
+        # Check for controlled sitting down followed by lying down
+        has_standing_to_sitting = False
+        has_sitting_to_lying = False
         
         for i in range(len(posture_sequence) - 1):
-            # Pattern 1: Direct standing to lying (sudden collapse)
             if (posture_sequence[i] == "standing" and 
-                posture_sequence[i + 1] == "lying"):
-                # Make sure this isn't part of a getting up sequence
-                # Check if there's a lying to standing pattern elsewhere
-                has_getting_up = any(
-                    posture_sequence[j] == "lying" and 
-                    j + 1 < len(posture_sequence) and
-                    posture_sequence[j + 1] in ["sitting", "standing"]
-                    for j in range(len(posture_sequence) - 1)
-                )
-                if not has_getting_up:
-                    print(f"[FALL DEBUG] Sudden collapse detected: standing → lying at position {i}")
-                    return True
+                posture_sequence[i + 1] == "sitting"):
+                has_standing_to_sitting = True
+            elif (posture_sequence[i] == "sitting" and 
+                  posture_sequence[i + 1] == "lying"):
+                has_sitting_to_lying = True
         
-        # Pattern 2: Multiple erratic movements ending in lying (loss of balance)
-        if len(posture_sequence) >= 4:
-            for i in range(len(posture_sequence) - 3):
-                window = posture_sequence[i:i+4]
-                unique_postures = set(window)
-                
-                # If we see 3+ different postures in 4 frames ending with lying
-                # AND no normal lying→sitting/standing transitions
-                if (len(unique_postures) >= 3 and 
-                    window[-1] == "lying" and 
-                    window[-2] == "lying" and
-                    "standing" in window[:2]):  # Started from standing
-                    
-                    # Double-check this isn't a normal movement sequence
-                    has_normal_transition = any(
-                        window[j] == "lying" and 
-                        j + 1 < len(window) and
-                        window[j + 1] in ["sitting", "standing"]
-                        for j in range(len(window) - 1)
-                    )
-                    if not has_normal_transition:
-                        print(f"[FALL DEBUG] Erratic movement ending in lying detected: {window}")
-                        return True
+        if has_standing_to_sitting and has_sitting_to_lying:
+            print(f"[FALL DEBUG] Normal bedtime sequence: standing → sitting → lying")
+            return True
         
         return False
     
-    def _detect_rapid_horizontal_change(self, aspect_ratios: List[float]) -> bool:
-        """Detect rapid change to horizontal orientation indicating a fall."""
+    def _detect_direct_standing_to_lying(self, posture_sequence: List[str]) -> bool:
+        """Detect direct standing to lying transition (primary fall indicator)."""
+        # Look for standing directly followed by lying (skipping sitting)
+        for i in range(len(posture_sequence) - 1):
+            if (posture_sequence[i] == "standing" and 
+                posture_sequence[i + 1] == "lying"):
+                print(f"[FALL DEBUG] Direct standing→lying at position {i}")
+                return True
+        
+        # Also check for standing → unknown → lying (detection gap during fall)
+        for i in range(len(posture_sequence) - 2):
+            if (posture_sequence[i] == "standing" and 
+                posture_sequence[i + 1] == "unknown" and 
+                posture_sequence[i + 2] == "lying"):
+                print(f"[FALL DEBUG] Standing→unknown→lying at position {i}")
+                return True
+        
+        # Check for standing → unknown → unknown → lying (longer detection gap)
+        for i in range(len(posture_sequence) - 3):
+            if (posture_sequence[i] == "standing" and 
+                posture_sequence[i + 1] == "unknown" and 
+                posture_sequence[i + 2] == "unknown" and 
+                posture_sequence[i + 3] == "lying"):
+                print(f"[FALL DEBUG] Standing→unknown→unknown→lying at position {i}")
+                return True
+        
+        # Check for pattern where person was standing and later ends in lying with unknowns in between
+        # This handles cases where fall detection is temporarily lost during the fall
+        standing_positions = [i for i, p in enumerate(posture_sequence) if p == "standing"]
+        lying_positions = [i for i, p in enumerate(posture_sequence) if p == "lying"]
+        
+        if standing_positions and lying_positions:
+            last_standing = max(standing_positions)
+            first_lying = min(lying_positions)
+            
+            # If standing was followed by lying with only unknowns in between (no sitting)
+            if last_standing < first_lying:
+                between_postures = posture_sequence[last_standing + 1:first_lying]
+                if all(p in ["unknown"] for p in between_postures) and len(between_postures) <= 3:
+                    print(f"[FALL DEBUG] Standing followed by lying with unknown gap: positions {last_standing}→{first_lying}")
+                    return True
+        
+        return False
+    
+    def _detect_rapid_vertical_movement(self, bbox_sequence: List[Tuple[int, int, int, int]]) -> bool:
+        """Detect rapid downward movement of the person's center."""
+        if len(bbox_sequence) < 3:
+            return False
+        
+        # Calculate center points and vertical movements
+        centers = []
+        for bbox in bbox_sequence:
+            center_y = (bbox[1] + bbox[3]) / 2
+            centers.append(center_y)
+        
+        # Look for significant downward movement
+        max_downward_movement = 0
+        for i in range(1, len(centers)):
+            movement = centers[i] - centers[i-1]
+            if movement > max_downward_movement:
+                max_downward_movement = movement
+        
+        # Threshold: movement should be at least 8% of frame height
+        threshold = self.frame_height * 0.08
+        
+        if max_downward_movement > threshold:
+            print(f"[FALL DEBUG] Rapid vertical movement: {max_downward_movement:.1f}px (threshold: {threshold:.1f}px)")
+            return True
+        
+        return False
+    
+    def _detect_body_orientation_change(self, bbox_sequence: List[Tuple[int, int, int, int]]) -> bool:
+        """Detect change in body orientation (vertical to horizontal)."""
+        if len(bbox_sequence) < 3:
+            return False
+        
+        # Calculate aspect ratios
+        aspect_ratios = []
+        for bbox in bbox_sequence:
+            width = bbox[2] - bbox[0]
+            height = bbox[3] - bbox[1]
+            if height > 0:
+                ratio = width / height
+                aspect_ratios.append(ratio)
+        
         if len(aspect_ratios) < 3:
             return False
         
-        # Check for sudden increase in aspect ratio (becoming more horizontal)
+        # Look for transition from more vertical to more horizontal
+        initial_ratio = aspect_ratios[0]
+        final_ratio = aspect_ratios[-1]
+        
+        # Change from vertical/square (ratio < 1.2) to horizontal (ratio > 1.5)
+        if initial_ratio < 1.2 and final_ratio > 1.5:
+            print(f"[FALL DEBUG] Body orientation change: {initial_ratio:.2f} → {final_ratio:.2f}")
+            return True
+        
+        return False
+
+    def _detect_sudden_fall_transition(self, posture_sequence: List[str]) -> bool:
+        """Legacy method - kept for compatibility. Use _detect_direct_standing_to_lying instead."""
+        # This method is now simplified and mainly calls the new logic
+        return self._detect_direct_standing_to_lying(posture_sequence)
+    
+    def _detect_rapid_horizontal_change(self, aspect_ratios: List[float]) -> bool:
+        """Detect rapid change to horizontal orientation indicating a fall with improved sensitivity."""
+        if len(aspect_ratios) < 4:
+            return False
+        
+        print(f"[FALL DEBUG] Aspect ratios: {[f'{r:.2f}' for r in aspect_ratios]}")
+        
+        # Look for rapid transitions from vertical/square to horizontal
         for i in range(len(aspect_ratios) - 2):
-            # Rapid change from vertical/square to horizontal orientation
-            if (aspect_ratios[i] < 1.2 and  # Was relatively vertical/square
-                aspect_ratios[i + 1] > 1.8 and  # Became horizontal
-                aspect_ratios[i + 2] > 1.8):  # Stayed horizontal
+            initial_ratio = aspect_ratios[i]
+            mid_ratio = aspect_ratios[i + 1]
+            final_ratio = aspect_ratios[i + 2]
+            
+            # Pattern 1: Sudden horizontal change
+            if (initial_ratio < 1.3 and  # Was relatively vertical/square (more lenient)
+                mid_ratio > 1.6 and     # Became horizontal (more sensitive)
+                final_ratio > 1.6):     # Stayed horizontal
+                print(f"[FALL DEBUG] Rapid horizontal change: {initial_ratio:.2f} → {mid_ratio:.2f} → {final_ratio:.2f}")
+                return True
+            
+            # Pattern 2: Progressive horizontal change (gradual fall)
+            if (initial_ratio < 1.2 and  # Started vertical
+                mid_ratio > 1.4 and     # Transitioning
+                final_ratio > 1.8):     # Ended very horizontal
+                print(f"[FALL DEBUG] Progressive horizontal change: {initial_ratio:.2f} → {mid_ratio:.2f} → {final_ratio:.2f}")
+                return True
+        
+        # Look for overall trend toward horizontal orientation
+        if len(aspect_ratios) >= 5:
+            early_avg = sum(aspect_ratios[:2]) / 2
+            late_avg = sum(aspect_ratios[-2:]) / 2
+            
+            # Significant increase in horizontal orientation
+            if early_avg < 1.2 and late_avg > 1.7:
+                print(f"[FALL DEBUG] Overall horizontal trend: {early_avg:.2f} → {late_avg:.2f}")
                 return True
         
         return False
