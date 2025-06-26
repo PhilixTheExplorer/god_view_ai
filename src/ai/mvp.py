@@ -13,9 +13,9 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.api.alert_service import alert_service, Alert
-from .pose_detection import PoseDetection
-from .pose_analyzer import PoseAnalyzer
-from .simple_tracker import SimpleTracker
+from src.ai.pose_detection import PoseDetection
+from src.ai.pose_analyzer import PoseAnalyzer
+from src.ai.simple_tracker import SimpleTracker
 
 # Get the path to the models directory
 models_dir = Path(__file__).parent.parent.parent / "models"
@@ -404,7 +404,7 @@ class HospitalMonitorMVP:
         cv2.putText(display_frame, alert_text, (10, 60), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
-        cv2.imshow(f"Hospital Monitor MVP - {self.room_id}", display_frame)
+        cv2.imshow(f"Patient Monitor God View AI MVP - {self.room_id}", display_frame)
     
     def _draw_keypoints(self, frame: np.ndarray, keypoints: np.ndarray, color: Tuple[int, int, int]):
         """Draw pose keypoints on frame"""
