@@ -275,8 +275,14 @@ class PoseAnalyzer:
             fall_score += 3.0  # Strong indicator
             print(f"[FALL DEBUG] Direct standing→lying transition: +3.0")
         
-        # 2. SECONDARY: Rapid vertical movement (only if posture change detected)
-        if direct_fall and len(bbox_sequence) >= 4:
+        # 1b. ALTERNATIVE PRIMARY: Rapid posture degradation (standing → sitting → lying quickly)
+        rapid_degradation = self._detect_rapid_posture_degradation(posture_sequence, timestamps)
+        if rapid_degradation:
+            fall_score += 3.0  # Strong indicator
+            print(f"[FALL DEBUG] Rapid posture degradation: +3.0")
+        
+        # 2. SECONDARY: Rapid vertical movement
+        if (direct_fall or rapid_degradation) and len(bbox_sequence) >= 4:
             rapid_vertical = self._detect_rapid_vertical_movement(bbox_sequence)
             if rapid_vertical:
                 fall_score += 1.0
@@ -291,8 +297,10 @@ class PoseAnalyzer:
         
         # 4. VALIDATION: Temporal consistency check
         time_window = (timestamps[-1] - timestamps[0]).total_seconds()
-        if time_window > 3.0:  # Falls should happen within 3 seconds
-            print(f"[FALL DEBUG] Time window too long ({time_window:.1f}s) - likely not a fall")
+        # More flexible time window for rapid degradation cases
+        max_time_window = 5.0 if rapid_degradation else 3.0
+        if time_window > max_time_window:
+            print(f"[FALL DEBUG] Time window too long ({time_window:.1f}s > {max_time_window:.1f}s) - likely not a fall")
             return False
         
         # 5. VALIDATION: Final position check
@@ -327,16 +335,8 @@ class PoseAnalyzer:
                 print(f"[FALL DEBUG] Normal getting up pattern: lying → {posture_sequence[i + 1]}")
                 return True
         
-        # Pattern 2: Gradual transitions (controlled movements)
+        # Pattern 2: Lying → sitting → standing (getting up gradually)
         for i in range(len(posture_sequence) - 2):
-            # Standing → sitting → lying (controlled lying down)
-            if (posture_sequence[i] == "standing" and 
-                posture_sequence[i + 1] == "sitting" and 
-                posture_sequence[i + 2] == "lying"):
-                print(f"[FALL DEBUG] Normal controlled lying down: standing → sitting → lying")
-                return True
-            
-            # Lying → sitting → standing (getting up gradually)
             if (posture_sequence[i] == "lying" and 
                 posture_sequence[i + 1] == "sitting" and 
                 posture_sequence[i + 2] == "standing"):
@@ -349,22 +349,9 @@ class PoseAnalyzer:
             print(f"[FALL DEBUG] Stable lying position (not a fall)")
             return True
         
-        # Pattern 4: Sitting to lying with prior standing→sitting (normal bedtime)
-        # Check for controlled sitting down followed by lying down
-        has_standing_to_sitting = False
-        has_sitting_to_lying = False
-        
-        for i in range(len(posture_sequence) - 1):
-            if (posture_sequence[i] == "standing" and 
-                posture_sequence[i + 1] == "sitting"):
-                has_standing_to_sitting = True
-            elif (posture_sequence[i] == "sitting" and 
-                  posture_sequence[i + 1] == "lying"):
-                has_sitting_to_lying = True
-        
-        if has_standing_to_sitting and has_sitting_to_lying:
-            print(f"[FALL DEBUG] Normal bedtime sequence: standing → sitting → lying")
-            return True
+        # REMOVED: Normal bedtime sequences - these can also be falls
+        # The standing → sitting → lying pattern can occur during falls
+        # We should rely on other fall detection indicators instead
         
         return False
     
@@ -586,3 +573,42 @@ class PoseAnalyzer:
         """Get center point of the bounding box"""
         x1, y1, x2, y2 = bbox
         return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def _detect_rapid_posture_degradation(self, posture_sequence: List[str], timestamps: List) -> bool:
+        """Detect rapid posture degradation (standing → sitting → lying) that indicates a fall."""
+        if len(posture_sequence) < 3 or len(timestamps) < 3:
+            return False
+        
+        # Look for standing → sitting → lying pattern
+        for i in range(len(posture_sequence) - 2):
+            if (posture_sequence[i] == "standing" and 
+                posture_sequence[i + 1] == "sitting" and 
+                posture_sequence[i + 2] == "lying"):
+                
+                # Check if this happened quickly (indicating a fall vs. normal lying down)
+                time_span = (timestamps[i + 2] - timestamps[i]).total_seconds()
+                
+                # If transition happened within 2 seconds, it's likely a fall
+                if time_span <= 2.0:
+                    print(f"[FALL DEBUG] Rapid posture degradation: standing→sitting→lying in {time_span:.1f}s")
+                    return True
+                else:
+                    print(f"[FALL DEBUG] Slow posture transition: standing→sitting→lying in {time_span:.1f}s (normal)")
+        
+        # Also check for standing → lying through sitting with some unknowns
+        for i in range(len(posture_sequence) - 1):
+            if posture_sequence[i] == "standing":
+                # Look for lying position within next few frames
+                for j in range(i + 1, min(i + 6, len(posture_sequence))):
+                    if posture_sequence[j] == "lying":
+                        # Check what's in between
+                        between = posture_sequence[i + 1:j]
+                        # If it contains sitting and/or unknowns (but no standing), and it's fast
+                        if ("standing" not in between and 
+                            any(p in ["sitting", "unknown"] for p in between)):
+                            time_span = (timestamps[j] - timestamps[i]).total_seconds()
+                            if time_span <= 2.5:
+                                print(f"[FALL DEBUG] Rapid standing→lying with intermediate postures in {time_span:.1f}s")
+                                return True
+        
+        return False
