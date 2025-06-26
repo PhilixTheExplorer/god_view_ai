@@ -201,12 +201,20 @@ class HospitalMonitorMVP:
                 continue
               # Debug logging for fall detection
             if self.debug_mode and len(track_history) >= 3:
-                recent_postures = [d.posture for d in list(track_history)[-5:]]
+                recent_postures = [d.posture for d in list(track_history)[-8:]]
                 print(f"Track {track_id}: Recent postures: {recent_postures}")
+                
+                # Additional debug for fall detection analysis
+                if len(track_history) >= 5:
+                    recent_history = list(track_history)[-8:]
+                    fall_detected = self.pose_analyzer.detect_fall(track_history)
+                    print(f"Track {track_id}: Fall analysis result: {fall_detected}")
             
             # Check for falls
             if self.pose_analyzer.detect_fall(track_history):
+                recent_postures_for_alert = [d.posture for d in list(track_history)[-8:]]
                 print(f"🚨 FALL DETECTED for track {track_id}!")
+                print(f"   Posture sequence: {recent_postures_for_alert}")
                 
                 # Save snapshot for fall detection
                 snapshot_path = self._save_snapshot(frame, "FALL_DETECTED", track_id)
