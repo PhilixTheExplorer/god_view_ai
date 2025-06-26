@@ -395,7 +395,7 @@ class HospitalMonitorMVP:
             cv2.putText(display_frame, info_text, (x1, y1-10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
           # Add system info
-        info_text = f"Frame: {self.frame_count} | Room: {self.room_id} | Tracks: {len(self.tracker.tracks)}"
+        info_text = f"Room: {self.room_id}"
         cv2.putText(display_frame, info_text, (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
