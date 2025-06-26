@@ -1,0 +1,19 @@
+video_path,video_name,detected_label,fall_alerts_count,inactivity_alerts_count,total_alerts,frames_processed,has_fall_detection
+FallDataset\Coffee_room_01\Videos\video (1).avi,video (1).avi,no_fall,0,0,0,157,False
+FallDataset\Coffee_room_01\Videos\video (10).avi,video (10).avi,no_fall,0,0,0,362,False
+FallDataset\Coffee_room_01\Videos\video (2).avi,video (2).avi,no_fall,0,0,0,306,False
+FallDataset\Coffee_room_01\Videos\video (3).avi,video (3).avi,no_fall,0,0,0,304,False
+FallDataset\Coffee_room_01\Videos\video (4).avi,video (4).avi,no_fall,0,0,0,207,False
+FallDataset\Coffee_room_01\Videos\video (5).avi,video (5).avi,no_fall,0,0,0,181,False
+FallDataset\Coffee_room_01\Videos\video (6).avi,video (6).avi,no_fall,0,0,0,239,False
+FallDataset\Coffee_room_01\Videos\video (7).avi,video (7).avi,no_fall,0,0,0,174,False
+FallDataset\Coffee_room_01\Videos\video (8).avi,video (8).avi,no_fall,0,0,0,258,False
+FallDataset\Coffee_room_01\Videos\video (9).avi,video (9).avi,no_fall,0,0,0,206,False
+dataset\chute02\cam1.avi,cam1.avi,no_fall,0,0,0,831,False
+dataset\chute02\cam2.avi,cam2.avi,no_fall,0,0,0,846,False
+dataset\chute02\cam3.avi,cam3.avi,no_fall,0,0,0,806,False
+dataset\chute02\cam4.avi,cam4.avi,no_fall,0,0,0,822,False
+dataset\chute02\cam5.avi,cam5.avi,no_fall,0,0,0,824,False
+dataset\chute02\cam6.avi,cam6.avi,no_fall,0,0,0,839,False
+dataset\chute02\cam7.avi,cam7.avi,no_fall,0,0,0,839,False
+dataset\chute02\cam8.avi,cam8.avi,no_fall,0,0,0,812,False
