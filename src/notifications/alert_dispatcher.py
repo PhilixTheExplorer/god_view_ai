@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 BOT_API = f"https://api.telegram.org/bot{os.getenv('BOT_TOKEN')}/sendMessage"
 BOT_PHOTO_API = f"https://api.telegram.org/bot{os.getenv('BOT_TOKEN')}/sendPhoto"
+BOT_VIDEO_API = f"https://api.telegram.org/bot{os.getenv('BOT_TOKEN')}/sendVideo"
 
 async def send_alert(role: str, message: str, priority: str = "normal") -> bool:
     """
@@ -126,7 +127,7 @@ def _format_alert_message(message: str, priority: str = "normal", role: str = "d
         # Structured alert formatting
         formatted_msg = f"""
 {config['border']}
-{config['icon']} <b>HOSPITAL ALERT SYSTEM</b> {config['icon']}
+{config['icon']} <b>GOD VIEW AI Monitor</b> {config['icon']}
 {config['border']}
 
 {config['bg_emoji']} <b><u>{config['urgency']}</u></b>
@@ -135,17 +136,16 @@ def _format_alert_message(message: str, priority: str = "normal", role: str = "d
 ├─ 📋 <b>Type:</b> <code>{alert_data['type']}</code>
 ├─ 🏠 <b>Room:</b> <code>{alert_data['room']}</code>
 ├─ 👤 <b>Patient ID:</b> <code>{alert_data['patient_id']}</code>
-├─ 🎯 <b>Frame:</b> <code>{alert_data['frame']}</code>
 └─ ⏰ <b>Time:</b> <code>{alert_data['time']}</code>
 
 📝 <b>Description:</b>
 <i>{alert_data['description']}</i>
 
 {role_emoji} <b>Target:</b> {role.title()} Staff
-📅 <b>Received:</b> {timestamp}
+<b>Received:</b> {timestamp}
 
 {config['border']}
-⚡ <b>Action Required - Please Respond Immediately</b> ⚡
+<b>Action Required - Please Respond Immediately</b>
 {config['border']}
 """
     else:
@@ -433,4 +433,65 @@ async def send_photo_alert(role: str, message: str, photo_path: str, priority: s
                 logger.error(f"Error sending photo alert to user {uid}: {e}")
     
     logger.info(f"Photo alert sent to {success_count}/{total_users} users")
+    return success_count == total_users
+
+async def send_video_alert(role: str, message: str, video_path: str, priority: str = "normal") -> bool:
+    """
+    Send alert message with video to all users with specified role
+    
+    Args:
+        role (str): Role to send alert to
+        message (str): Alert message
+        video_path (str): Path to the video file
+        priority (str): Priority level (normal, high, critical)
+        
+    Returns:
+        bool: True if all messages sent successfully
+    """
+    user_ids = get_users_by_role(role)
+    
+    if not user_ids:
+        logger.warning(f"No users found with role: {role}")
+        return False
+    
+    # Check if video file exists
+    if not os.path.exists(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        return False
+    
+    # Enhanced visual formatting with colors and emojis
+    formatted_message = _format_alert_message(message, priority, role)
+    
+    success_count = 0
+    total_users = len(user_ids)
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:  # Longer timeout for video uploads
+        for uid in user_ids:
+            try:
+                # Send video with caption
+                with open(video_path, 'rb') as video_file:
+                    files = {'video': video_file}
+                    data = {
+                        "chat_id": uid,
+                        "caption": formatted_message,
+                        "parse_mode": "HTML",
+                        "supports_streaming": True  # Enable streaming for better performance
+                    }
+                    
+                    response = await client.post(
+                        BOT_VIDEO_API,
+                        files=files,
+                        data=data
+                    )
+                    
+                if response.status_code == 200:
+                    success_count += 1
+                    logger.info(f"Video alert sent successfully to user {uid}")
+                else:
+                    logger.error(f"Failed to send video alert to user {uid}: {response.status_code}")
+                    
+            except Exception as e:
+                logger.error(f"Error sending video alert to user {uid}: {e}")
+    
+    logger.info(f"Video alert sent to {success_count}/{total_users} users")
     return success_count == total_users

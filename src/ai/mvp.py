@@ -56,27 +56,72 @@ class HospitalMonitorMVP:
         self.fall_detection_enabled = True
         self.debug_mode = True  # Enable debug logging
         
-        # Create snapshots directory
-        self.snapshots_dir = Path("snapshots")
-        self.snapshots_dir.mkdir(exist_ok=True)
+        # Create clips directory for video sequences
+        self.clips_dir = Path("clips")
+        self.clips_dir.mkdir(exist_ok=True)
+        
+        # Video recording settings
+        self.clip_duration_seconds = 5  # 5 second clips
+        self.clip_buffer_frames = []    # Buffer to store recent frames
+        self.fps = 30  # Will be updated with actual video FPS
     
-    def _save_snapshot(self, frame: np.ndarray, alert_type: str, track_id: int) -> str:
-        """Save a snapshot of the current frame for alerts"""
+    def _save_fall_clip(self, alert_type: str, track_id: int) -> str:
+        """Save a video clip of the fall sequence for alerts"""
         try:
+            if len(self.clip_buffer_frames) < 10:  # Need at least 10 frames for a meaningful clip
+                print(f"⚠️ Not enough frames in buffer for clip creation ({len(self.clip_buffer_frames)} frames)")
+                return None
+            
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{alert_type}_{self.room_id}_track{track_id}_{timestamp}_frame{self.frame_count}.jpg"
-            filepath = self.snapshots_dir / filename
+            filename = f"{alert_type}_{self.room_id}_track{track_id}_{timestamp}_frame{self.frame_count}.mp4"
+            filepath = self.clips_dir / filename
             
-            # Save the frame
-            cv2.imwrite(str(filepath), frame)
+            # Get frame dimensions from the first frame
+            height, width = self.clip_buffer_frames[0].shape[:2]
             
-            # Log the snapshot
-            print(f"📸 Snapshot saved: {filepath}")
+            # Create video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(str(filepath), fourcc, self.fps, (width, height))
             
-            return str(filepath)
+            if not out.isOpened():
+                print(f"❌ Error: Could not open video writer for {filepath}")
+                return None
+            
+            # Write frames to video
+            frames_written = 0
+            for frame in self.clip_buffer_frames:
+                out.write(frame)
+                frames_written += 1
+            
+            out.release()
+            
+            # Verify the video file was created and has content
+            if filepath.exists() and filepath.stat().st_size > 1000:  # At least 1KB
+                print(f"🎥 Fall clip saved: {filepath} ({frames_written} frames, {frames_written/self.fps:.1f}s)")
+                return str(filepath)
+            else:
+                print(f"❌ Error: Video file was not created properly or is too small")
+                return None
+                
         except Exception as e:
-            print(f"❌ Error saving snapshot: {e}")
+            print(f"❌ Error saving fall clip: {e}")
             return None
+    
+    def _update_clip_buffer(self, frame: np.ndarray):
+        """Update the rolling buffer of frames for clip creation"""
+        try:
+            # Add current frame to buffer
+            self.clip_buffer_frames.append(frame.copy())
+            
+            # Maintain buffer size (keep last N seconds of video)
+            max_buffer_frames = int(self.clip_duration_seconds * self.fps)
+            if len(self.clip_buffer_frames) > max_buffer_frames:
+                # Remove oldest frames to maintain buffer size
+                frames_to_remove = len(self.clip_buffer_frames) - max_buffer_frames
+                self.clip_buffer_frames = self.clip_buffer_frames[frames_to_remove:]
+                
+        except Exception as e:
+            print(f"❌ Error updating clip buffer: {e}")
     
     def process_video(self):
         """Process video file for patient monitoring"""
@@ -91,6 +136,9 @@ class HospitalMonitorMVP:
         fps = self.cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = total_frames / fps if fps > 0 else 0
+        
+        # Update FPS for clip recording
+        self.fps = max(fps, 1)  # Ensure FPS is at least 1
         
         # Calculate frame delay to maintain original video timing
         frame_delay = int(1000 / fps) if fps > 0 else 33  # milliseconds per frame
@@ -125,7 +173,11 @@ class HospitalMonitorMVP:
                 
             self.frame_count += 1
             
-            try:                # Process frame
+            try:                
+                # Update clip buffer for video recording
+                self._update_clip_buffer(frame)
+                
+                # Process frame
                 detections = self._detect_poses(frame)
                 tracked_detections = self.tracker.update(detections)
                 self._analyze_anomalies(frame)
@@ -216,30 +268,30 @@ class HospitalMonitorMVP:
                 print(f"🚨 FALL DETECTED for track {track_id}!")
                 print(f"   Posture sequence: {recent_postures_for_alert}")
                 
-                # Save snapshot for fall detection
-                snapshot_path = self._save_snapshot(frame, "FALL_DETECTED", track_id)
+                # Save video clip for fall detection
+                clip_path = self._save_fall_clip("FALL_DETECTED", track_id)
                 
                 alert = alert_service.create_alert(
                     patient_id=track_id,
                     room_id=self.room_id,
                     alert_type="FALL_DETECTED",
-                    description=f"Patient fall detected in {self.room_id} - immediate attention required. Analysis shows transition from upright to lying position.",
+                    description=f"Patient fall detected in {self.room_id} - immediate attention required. Fall sequence captured in video clip.",
                     bbox=track_history[-1].bbox,
                     confidence=track_history[-1].confidence,
                     frame_number=self.frame_count                )
                 
-                if snapshot_path:
-                    # Send alert with photo
-                    success = alert_service.send_photo_alert(alert, snapshot_path)
+                if clip_path:
+                    # Send alert with video clip
+                    success = alert_service.send_video_alert(alert, clip_path)
                     if success:
-                        print(f"✅ Fall alert with photo sent to Telegram!")
+                        print(f"✅ Fall alert with video clip sent to Telegram!")
                     else:
-                        print(f"❌ Failed to send fall alert with photo to Telegram")
+                        print(f"❌ Failed to send fall alert with video clip to Telegram")
                 else:
-                    # Fallback to regular alert if snapshot failed
+                    # Fallback to regular alert if clip creation failed
                     success = alert_service.send_alert(alert)
                     if success:
-                        print(f"✅ Fall alert sent to Telegram!")
+                        print(f"✅ Fall alert sent to Telegram (no video clip)!")
                     else:
                         print(f"❌ Failed to send fall alert to Telegram")
             
@@ -354,6 +406,26 @@ class HospitalMonitorMVP:
             print("\nAlert Summary:")
             for alert in alert_service.alert_history:
                 print(f"  - {alert.alert_type} (Patient {alert.patient_id}) at frame {alert.frame_number}")
+
+    def _save_snapshot(self, frame: np.ndarray, alert_type: str, track_id: int) -> str:
+        """Save a snapshot of the current frame for alerts (used for non-fall alerts)"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{alert_type}_{self.room_id}_track{track_id}_{timestamp}_frame{self.frame_count}.jpg"
+            
+            # Use clips directory for consistency
+            filepath = self.clips_dir / filename
+            
+            # Save the frame
+            cv2.imwrite(str(filepath), frame)
+            
+            # Log the snapshot
+            print(f"📸 Snapshot saved: {filepath}")
+            
+            return str(filepath)
+        except Exception as e:
+            print(f"❌ Error saving snapshot: {e}")
+            return None
 
 def main():
     """Main function for MVP"""
